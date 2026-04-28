@@ -6,9 +6,19 @@
     "lint": "nx run-many --target=lint",
     "lint:fix": "nx run-many --target=lint --fix",
     "test": "nx run-many --target=test",
-    "test:cov": "nx run-many --target=test --coverage"
+    "test:cov": "nx run-many --target=test --coverage",
+    "prepare": "husky"
   },
   "private": true,
+  "lint-staged": {
+    "*.{ts,js}": [
+      "eslint --fix",
+      "prettier --write"
+    ],
+    "*.{json,md}": [
+      "prettier --write"
+    ]
+  },
   "dependencies": {
     "@nestjs/common": "^11.0.0",
     "@nestjs/core": "^11.0.0",
@@ -18,6 +28,8 @@
     "rxjs": "^7.8.0"
   },
   "devDependencies": {
+    "@commitlint/cli": "^20.5.2",
+    "@commitlint/config-conventional": "^20.5.0",
     "@eslint/js": "^9.8.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.0",
@@ -37,10 +49,12 @@
     "@types/node": "20.19.9",
     "eslint": "^9.8.0",
     "eslint-config-prettier": "^10.0.0",
+    "husky": "^9.1.7",
     "jest": "^30.0.2",
     "jest-environment-node": "^30.0.2",
     "jest-util": "^30.0.2",
     "jsonc-eslint-parser": "^2.1.0",
+    "lint-staged": "^16.4.0",
     "nx": "22.7.0",
     "prettier": "~3.6.2",
     "ts-jest": "^29.4.0",
