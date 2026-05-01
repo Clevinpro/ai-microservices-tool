@@ -17,6 +17,12 @@
         }
       }
     },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc -p apps/ai-service/tsconfig.app.json --noEmit"
+      }
+    },
     "prune-lockfile": {
       "dependsOn": ["build"],
       "cache": true,

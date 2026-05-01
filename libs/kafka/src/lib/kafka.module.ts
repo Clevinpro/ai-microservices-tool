@@ -1,8 +1,8 @@
-import { DynamicModule, Module } from '@nestjs/common';
 import { IKafkaModuleConfig } from '@ai-platform/shared';
-import { KAFKA_MODULE_CONFIG } from './kafka.constants';
-import { KafkaProducerService } from './kafka-producer.service';
+import { DynamicModule, Module } from '@nestjs/common';
 import { KafkaConsumerService } from './kafka-consumer.service';
+import { KafkaProducerService } from './kafka-producer.service';
+import { KAFKA_MODULE_CONFIG } from './kafka.constants';
 
 @Module({})
 export class KafkaModule {
