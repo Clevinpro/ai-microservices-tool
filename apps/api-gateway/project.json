@@ -56,6 +56,7 @@
       "dependsOn": ["build"],
       "options": {
         "buildTarget": "api-gateway:build",
+        "port": 9230,
         "runBuildTargetDependencies": false
       },
       "configurations": {

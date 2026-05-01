@@ -17,6 +17,7 @@
     "skipDefaultLibCheck": true,
     "paths": {
       "@app/*": ["./apps/*/src"],
+      "@api-gateway/*": ["./apps/api-gateway/src/*"],
       "@libs/*": ["./libs/*/src/index.ts"],
       "@ai-platform/shared": ["./libs/shared/src/index.ts"],
       "@ai-platform/kafka": ["./libs/kafka/src/index.ts"],
