@@ -33,3 +33,28 @@ model RefreshToken {
 
   @@map("refresh_tokens")
 }
+
+model Document {
+  id        String   @id @default(cuid())
+  title     String
+  content   String
+  filePath  String   @map("file_path")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  chunks Chunk[]
+
+  @@map("documents")
+}
+
+model Chunk {
+  id         String                     @id @default(cuid())
+  content    String
+  embedding  Unsupported("vector(768)")
+  documentId String                     @map("document_id")
+  createdAt  DateTime                   @default(now()) @map("created_at")
+
+  document Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  @@map("chunks")
+}

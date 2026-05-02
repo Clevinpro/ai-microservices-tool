@@ -1,11 +1,11 @@
 import { IKafkaMessage, IKafkaModuleConfig } from '@ai-platform/shared';
 import { Inject, Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
-import { ClientKafka } from '@nestjs/microservices';
+import { Kafka, Partitioners, type Producer } from 'kafkajs';
 import { KAFKA_MODULE_CONFIG } from './kafka.constants';
 
 @Injectable()
 export class KafkaProducerService implements OnModuleInit, OnModuleDestroy {
-  private client!: ClientKafka;
+  private producer!: Producer;
 
   constructor(
     @Inject(KAFKA_MODULE_CONFIG)
@@ -13,16 +13,29 @@ export class KafkaProducerService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   async onModuleInit(): Promise<void> {
-    // TODO: create ClientKafka instance from this.config (clientId, brokers)
-    // TODO: call this.client.connect()
+    const kafka = new Kafka({
+      clientId: `${this.config.clientId}-producer`,
+      brokers: this.config.brokers,
+    });
+    this.producer = kafka.producer({
+      createPartitioner: Partitioners.LegacyPartitioner,
+    });
+    await this.producer.connect();
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   async publish<T>(topic: string, message: IKafkaMessage<T>): Promise<void> {
-    // TODO: this.client.emit(topic, message) — returns Observable, convert to Promise
+    await this.producer.send({
+      topic,
+      messages: [
+        {
+          key: message.key,
+          value: JSON.stringify(message.value),
+        },
+      ],
+    });
   }
 
   async onModuleDestroy(): Promise<void> {
-    // TODO: this.client.close()
+    await this.producer?.disconnect();
   }
 }

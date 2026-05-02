@@ -1,12 +1,9 @@
-import { Body, Controller, MessageEvent, Post, Req, Sse, UseGuards } from '@nestjs/common';
 import { KafkaConsumerService, KafkaProducerService } from '@ai-platform/kafka';
-import { LoggerService } from '@ai-platform/shared';
+import { KAFKA_TOPICS, LoggerService } from '@ai-platform/shared';
+import { Body, Controller, MessageEvent, Post, Req, Sse, UseGuards } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { JwtAuthGuard } from '../auth/auth.guard';
 import { ChatRequestDto } from './ai.dto';
-
-const AI_REQUEST_TOPIC = 'AI_REQUEST';
-const AI_RESPONSE_TOPIC = 'AI_RESPONSE';
 
 type AuthenticatedRequest = {
   user: {
@@ -42,8 +39,8 @@ export class AiController {
       conversationId: dto.conversationId,
     });
 
-    await this.kafkaProducer.publish(AI_REQUEST_TOPIC, {
-      topic: AI_REQUEST_TOPIC,
+    await this.kafkaProducer.publish(KAFKA_TOPICS.AI_REQUEST, {
+      topic: KAFKA_TOPICS.AI_REQUEST,
       value: {
         userId,
         message: dto.message,
@@ -69,15 +66,18 @@ export class AiController {
     this.logger.log('AI chat stream opened', AiController.name, { userId });
 
     return new Observable<MessageEvent>((subscriber) => {
-      void this.kafkaConsumer.subscribe<AiResponsePayload>(AI_RESPONSE_TOPIC, async (message) => {
-        if (message.value.userId !== userId) {
-          return;
-        }
+      void this.kafkaConsumer.subscribe<AiResponsePayload>(
+        KAFKA_TOPICS.AI_RESPONSE,
+        async (message) => {
+          if (message.value.userId !== userId) {
+            return;
+          }
 
-        subscriber.next({
-          data: message.value,
-        });
-      });
+          subscriber.next({
+            data: message.value,
+          });
+        },
+      );
     });
   }
 

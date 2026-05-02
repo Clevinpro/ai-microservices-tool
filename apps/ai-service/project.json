@@ -55,6 +55,7 @@
       "dependsOn": ["build"],
       "options": {
         "buildTarget": "ai-service:build",
+        "port": 9231,
         "runBuildTargetDependencies": false
       },
       "configurations": {
