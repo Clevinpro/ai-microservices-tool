@@ -1,4 +1,4 @@
-import { AiChatMessage, IAIProvider } from '@ai-platform/shared';
+import { AiChatMessage, IAIProvider, LoggerService } from '@ai-platform/shared';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { isAxiosError } from 'axios';
@@ -9,7 +9,10 @@ import { Readable } from 'stream';
 export class OllamaProvider implements IAIProvider {
   private readonly ollamaUrl: string;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly logger: LoggerService,
+  ) {
     this.ollamaUrl = this.configService.get<string>('OLLAMA_URL') ?? 'http://localhost:11434';
   }
 
@@ -119,6 +122,10 @@ export class OllamaProvider implements IAIProvider {
     return 'llama3.2';
   }
 
+  async getActiveModel(): Promise<string> {
+    return this.resolveModel();
+  }
+
   chat(message: AiChatMessage): Observable<string> {
     return new Observable<string>((subscriber) => {
       let stream: Readable | undefined;
@@ -145,6 +152,7 @@ export class OllamaProvider implements IAIProvider {
       void (async () => {
         try {
           const model = await this.resolveModel();
+          this.logger.log(`Ollama chat request: model=${model}`, 'OllamaProvider');
           const messages = OllamaProvider.toChatMessages(message);
           const response = await axios.post<Readable>(
             `${this.ollamaUrl}/api/chat`,

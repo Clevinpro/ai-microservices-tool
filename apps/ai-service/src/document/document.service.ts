@@ -10,7 +10,7 @@ import { OllamaEmbeddingService } from '../embeddings/embeddings.service';
 @Injectable()
 export class DocumentService {
   private static readonly CHUNK_SIZE = 500;
-  private static readonly CHUNK_OVERLAP = 50;
+  private static readonly CHUNK_OVERLAP = 100;
 
   constructor(
     private readonly embeddingsService: OllamaEmbeddingService,

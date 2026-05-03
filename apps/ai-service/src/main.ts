@@ -61,6 +61,9 @@ async function bootstrap() {
   app.useLogger(logger);
   kafkaConsumer.useLogger(logger);
 
+  const aiAgent = process.env.AI_PROVIDER ?? AI_PROVIDER.OLLAMA;
+  logger.log(`Startup: AI agent from .env (AI_PROVIDER)=${aiAgent}`, 'AiService');
+
   const globalPrefix = 'api';
   app.setGlobalPrefix(globalPrefix);
 

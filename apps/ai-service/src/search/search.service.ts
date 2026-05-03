@@ -19,7 +19,7 @@ export class SearchService {
     private readonly logger: LoggerService,
   ) {}
 
-  async similaritySearch(query: string, limit = 3): Promise<SimilaritySearchResult[]> {
+  async similaritySearch(query: string, limit = 6): Promise<SimilaritySearchResult[]> {
     this.logger.log(
       `Similarity search: queryLength=${query.length}, limit=${limit}`,
       'SearchService',

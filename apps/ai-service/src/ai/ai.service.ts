@@ -21,6 +21,20 @@ export class AiService {
     const payload = this.parseRequest(request);
     this.logger.log(`Process message: length=${payload.message.length}`, 'AiService');
     const provider = this.factory.getProvider();
+    void provider
+      .getActiveModel?.()
+      .then((model) => {
+        this.logger.log(
+          `Selected provider=${provider.constructor.name}, model=${model}`,
+          'AiService',
+        );
+      })
+      .catch((err: unknown) => {
+        this.logger.warn(
+          `Cannot resolve active model: ${err instanceof Error ? err.message : String(err)}`,
+          'AiService',
+        );
+      });
 
     return from(this.searchService.similaritySearch(payload.message)).pipe(
       tap((chunks) => this.logger.log(`Context chunks: count=${chunks.length}`, 'AiService')),
@@ -28,9 +42,15 @@ export class AiService {
         const messageWithContext =
           chunks.length > 0
             ? {
-                system: `Відповідай на основі контексту:
+                system: `Контекст (єдине джерело фактів):
 ${this.searchService.formatContext(chunks)}
-Якщо відповіді немає в контексті — скажи про це.`,
+
+Правила відповіді:
+- Використовуй лише формулювання з контексту вище; 
+- Відповідай дослівно з нього, без перефразування та без «своїх» пояснень, прикладів чи доповнень.
+- Не додавай від себе інформацію, яку немає в контексті.
+- Формат відповіді (номер тега в документації, повний текст з документації).
+- Якщо в контексті немає відповіді — прямо скажи про це.`,
                 user: payload.message,
               }
             : payload.message;
