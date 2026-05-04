@@ -38,10 +38,12 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
   }
 
   async subscribe<T>(topic: string, handler: KafkaMessageHandler<T>): Promise<void> {
-    if (!this.handlersByTopic.has(topic)) {
-      this.handlersByTopic.set(topic, new Set());
+    let handlers = this.handlersByTopic.get(topic);
+    if (!handlers) {
+      handlers = new Set<KafkaMessageHandler<unknown>>();
+      this.handlersByTopic.set(topic, handlers);
     }
-    this.handlersByTopic.get(topic)!.add(handler as KafkaMessageHandler<unknown>);
+    handlers.add(handler as KafkaMessageHandler<unknown>);
 
     const desiredTopics = new Set(this.handlersByTopic.keys());
     if (topicSetsEqual(desiredTopics, this.activeSubscriptionTopics)) {
