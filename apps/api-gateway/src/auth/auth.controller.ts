@@ -76,6 +76,11 @@ export class AuthController {
     return this.proxyToAuthService(request, response, body, headers);
   }
 
+  @Get('me')
+  proxyMe(@Req() request: Request, @Res() response: Response): Promise<void> {
+    return this.proxyToAuthService(request, response);
+  }
+
   private async proxyToAuthService(
     request: Request,
     response: Response,
