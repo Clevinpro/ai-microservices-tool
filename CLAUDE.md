@@ -2,6 +2,10 @@
 
 NestJS microservices monorepo powered by Nx (@nx/nest v22).
 
+## Rules
+
+- All code comments, documentation, and descriptions must be in **English**.
+
 ## Project layout
 
 ```

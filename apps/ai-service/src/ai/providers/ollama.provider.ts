@@ -1,4 +1,4 @@
-import { AiChatMessage, IAIProvider, LoggerService } from '@ai-platform/shared';
+import { AiChatMessage, ChatMessage, IAIProvider, LoggerService } from '@ai-platform/shared';
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import axios, { isAxiosError } from 'axios';
@@ -17,8 +17,8 @@ export class OllamaProvider implements IAIProvider {
   }
 
   /**
-   * Один user-текст — найкраща сумісність із /api/chat (частина моделей/версій
-   * некоректно приймає окреме повідомлення role=system).
+   * Convert messages for Ollama /api/chat.
+   * Ollama only supports role=user — system is concatenated as the first user message.
    */
   private static toChatMessages(message: AiChatMessage): Array<{
     role: 'user';
@@ -27,8 +27,29 @@ export class OllamaProvider implements IAIProvider {
     if (typeof message === 'string') {
       return [{ role: 'user', content: message }];
     }
-    const content = `${message.system}\n\n---\n\n${message.user}`;
-    return [{ role: 'user', content }];
+    if (!Array.isArray(message)) {
+      const content = `${message.system}\n\n---\n\n${message.user}`;
+      return [{ role: 'user', content }];
+    }
+    // Keep system as a separate user block at the start, rest as individual messages.
+    let systemContent: string | undefined;
+    const nonSystem = message.filter((m): m is ChatMessage => m.role !== 'system');
+    const systemMsg = message.find((m) => m.role === 'system');
+    if (systemMsg) {
+      systemContent = systemMsg.content;
+    }
+    if (nonSystem.length === 0) {
+      // Only system — treat it as RAG context.
+      return [{ role: 'user', content: systemContent ?? '' }];
+    }
+    if (systemContent) {
+      const [first, ...rest] = nonSystem;
+      return [
+        { role: 'user', content: `${systemContent}\n\n---\n\n${first.content}` },
+        ...rest.map((m) => ({ role: 'user' as const, content: m.content })),
+      ];
+    }
+    return nonSystem.map((m) => ({ role: 'user' as const, content: m.content }));
   }
 
   /**
@@ -78,7 +99,7 @@ export class OllamaProvider implements IAIProvider {
   }
 
   /**
-   * Пріоритет: OLLAMA_MODEL / OLLAMA_CHAT_MODEL → модель з /api/ps → перша підходяща з /api/tags → дефолт.
+   * Priority: OLLAMA_MODEL / OLLAMA_CHAT_MODEL → model from /api/ps → first match from /api/tags → default.
    */
   async resolveModel(): Promise<string> {
     const fromEnv =

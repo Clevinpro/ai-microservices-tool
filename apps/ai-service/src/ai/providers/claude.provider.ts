@@ -34,12 +34,30 @@ export class ClaudeProvider implements IAIProvider {
               max_tokens: 4096,
               messages: [{ role: 'user', content: message }],
             })
-          : this.anthropic.messages.stream({
-              model: this.model,
-              max_tokens: 4096,
-              system: message.system,
-              messages: [{ role: 'user', content: message.user }],
-            });
+          : Array.isArray(message)
+            ? (() => {
+                let system: string | undefined;
+                const userMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+                for (const m of message) {
+                  if (m.role === 'system') {
+                    system = system ? system + '\n\n' + m.content : m.content;
+                  } else {
+                    userMessages.push({ role: m.role as 'user' | 'assistant', content: m.content });
+                  }
+                }
+                return this.anthropic.messages.stream({
+                  model: this.model,
+                  max_tokens: 4096,
+                  ...(system ? { system } : {}),
+                  messages: userMessages,
+                });
+              })()
+            : this.anthropic.messages.stream({
+                model: this.model,
+                max_tokens: 4096,
+                system: message.system,
+                messages: [{ role: 'user', content: message.user }],
+              });
 
       stream.on('text', (text) => subscriber.next(text));
       stream.on('error', (error) => subscriber.error(error));

@@ -1,12 +1,19 @@
 import type { Observable } from 'rxjs';
 
-/** Рядок — одне user-повідомлення; об'єкт — system + user (RAG-контекст). */
-export type AiChatMessage =
-  | string
-  | {
-      system: string;
-      user: string;
-    };
+export type MessageRole = 'system' | 'user' | 'assistant';
+
+export interface ChatMessage {
+  role: MessageRole;
+  content: string;
+}
+
+/**
+ * Message format for LLM providers:
+ * - string — single user message (backward compat)
+ * - { system, user } — system + user (backward compat)
+ * - ChatMessage[] — full chat history with roles
+ */
+export type AiChatMessage = string | { system: string; user: string } | ChatMessage[];
 
 export interface IAIProvider {
   chat(message: AiChatMessage): Observable<string>;

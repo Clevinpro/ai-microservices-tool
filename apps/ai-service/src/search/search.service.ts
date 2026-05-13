@@ -50,13 +50,13 @@ export class SearchService {
 
   formatContext(chunks: SimilaritySearchResult[]): string {
     if (chunks.length === 0) {
-      return 'Контекст з документації:';
+      return 'Documentation context:';
     }
 
     const formattedChunks = chunks
       .map((chunk) => `[${chunk.title}]\n${chunk.content}\n---`)
       .join('\n');
 
-    return `Контекст з документації:\n${formattedChunks}`;
+    return `Documentation context:\n${formattedChunks}`;
   }
 }

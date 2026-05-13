@@ -15,6 +15,11 @@ function topicSetsEqual(a: Set<string>, b: Set<string>): boolean {
   return true;
 }
 
+// How long (ms) the consumer can go without a heartbeat before Kafka removes it.
+// Must exceed the slowest possible LLM response time (e.g. 5 min for local models).
+const SESSION_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const HEARTBEAT_INTERVAL_MS = 10_000; // 10 seconds
+
 @Injectable()
 export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
   private kafka!: Kafka;
@@ -33,7 +38,11 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
       clientId: `${this.config.clientId}-consumer`,
       brokers: this.config.brokers,
     });
-    this.consumer = this.kafka.consumer({ groupId: this.config.groupId });
+    this.consumer = this.kafka.consumer({
+      groupId: this.config.groupId,
+      sessionTimeout: SESSION_TIMEOUT_MS,
+      heartbeatInterval: HEARTBEAT_INTERVAL_MS,
+    });
     await this.consumer.connect();
   }
 
@@ -51,6 +60,10 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
     }
 
     await this.applySubscription([...desiredTopics]);
+  }
+
+  unsubscribe<T>(topic: string, handler: KafkaMessageHandler<T>): void {
+    this.handlersByTopic.get(topic)?.delete(handler as KafkaMessageHandler<unknown>);
   }
 
   private async applySubscription(topics: string[]): Promise<void> {
@@ -84,7 +97,12 @@ export class KafkaConsumerService implements OnModuleInit, OnModuleDestroy {
 
           const payload: IKafkaMessage<unknown> = { topic, value: parsed };
           for (const h of handlers) {
-            await h(payload);
+            try {
+              await h(payload);
+            } catch {
+              // Handler threw (e.g. stale SSE subscriber) — remove it and continue
+              handlers.delete(h);
+            }
           }
         },
       })

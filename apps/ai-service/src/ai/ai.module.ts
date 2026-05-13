@@ -1,11 +1,10 @@
 import { KAFKA_TOPICS, LoggerService } from '@ai-platform/shared';
 import { KafkaConsumerService, KafkaProducerService } from '@ai-platform/kafka';
 import { Module, OnModuleInit } from '@nestjs/common';
-import { lastValueFrom } from 'rxjs';
-import { reduce } from 'rxjs/operators';
-import { AiService } from './ai.service';
+import { ConversationService } from '../conversation/conversation.service';
 import { OllamaEmbeddingService } from '../embeddings/embeddings.service';
 import { SearchService } from '../search/search.service';
+import { AiService } from './ai.service';
 import { AiProviderFactory } from './providers/ai-provider.factory';
 import { ClaudeProvider } from './providers/claude.provider';
 import { OllamaProvider } from './providers/ollama.provider';
@@ -16,11 +15,22 @@ interface AiRequestPayload {
   message: string;
 }
 
+type AiResponsePayload = {
+  userId: string;
+  conversationId: string;
+  event: 'status' | 'chunk' | 'complete' | 'error';
+  status?: string;
+  result?: string;
+  error?: string;
+};
+
 @Module({
+  imports: [],
   providers: [
     AiService,
     SearchService,
     OllamaEmbeddingService,
+    ConversationService,
     AiProviderFactory,
     ClaudeProvider,
     OllamaProvider,
@@ -33,6 +43,7 @@ export class AiModule implements OnModuleInit {
     private readonly kafkaConsumer: KafkaConsumerService,
     private readonly kafkaProducer: KafkaProducerService,
     private readonly logger: LoggerService,
+    private readonly conversationService: ConversationService,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -40,35 +51,101 @@ export class AiModule implements OnModuleInit {
       KAFKA_TOPICS.AI_REQUEST,
       async ({ value }) => {
         try {
-          this.logger.log(
-            `Kafka AI_REQUEST: userId=${value.userId}, conversationId=${value.conversationId}, messageLength=${value.message?.length ?? 0}`,
-            'AiModule',
-          );
-          const result = await lastValueFrom(
-            this.aiService.processMessage(value).pipe(reduce((acc, chunk) => acc + chunk, '')),
-          );
+          let conversationId = value.conversationId;
+          if (!conversationId) {
+            this.logger.warn('AI_REQUEST received without conversationId', 'AiModule');
+            conversationId = await this.conversationService.createConversation(value.userId);
+          }
 
-          await this.kafkaProducer.publish(KAFKA_TOPICS.AI_RESPONSE, {
-            topic: KAFKA_TOPICS.AI_RESPONSE,
-            value: {
-              userId: value.userId,
-              conversationId: value.conversationId,
-              result,
-            },
-          });
           this.logger.log(
-            `Kafka AI_RESPONSE published: userId=${value.userId}, conversationId=${value.conversationId}, resultLength=${result.length}`,
+            `Kafka AI_REQUEST: userId=${value.userId}, conversationId=${conversationId}, messageLength=${value.message?.length ?? 0}`,
             'AiModule',
           );
+          await this.streamAiResponse(value, conversationId);
         } catch (error) {
           this.logger.error(
             error instanceof Error ? error.message : String(error),
             error instanceof Error ? error.stack : undefined,
             'AiModule',
           );
-          // Do not rethrow: invalid or poison messages would otherwise fail eachMessage repeatedly.
         }
       },
     );
+  }
+
+  private streamAiResponse(value: AiRequestPayload, conversationId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      let result = '';
+      let publishQueue = Promise.resolve();
+
+      const publishResponse = (payload: AiResponsePayload) => {
+        publishQueue = publishQueue.then(() =>
+          this.kafkaProducer.publish(KAFKA_TOPICS.AI_RESPONSE, {
+            topic: KAFKA_TOPICS.AI_RESPONSE,
+            value: payload,
+          }),
+        );
+
+        return publishQueue;
+      };
+
+      const publishStatus = (status: string) => {
+        void publishResponse({
+          userId: value.userId,
+          conversationId,
+          event: 'status',
+          status,
+        });
+      };
+
+      const subscription = this.aiService
+        .processMessage({ ...value, conversationId }, { onStatus: publishStatus })
+        .subscribe({
+          next: (chunk) => {
+            if (!chunk) {
+              return;
+            }
+
+            result += chunk;
+            void publishResponse({
+              userId: value.userId,
+              conversationId,
+              event: 'chunk',
+              result: chunk,
+            });
+          },
+          complete: () => {
+            void publishResponse({
+              userId: value.userId,
+              conversationId,
+              event: 'complete',
+            })
+              .then(() => {
+                this.logger.log(
+                  `Kafka AI_RESPONSE stream complete: userId=${value.userId}, conversationId=${conversationId}, resultLength=${result.length}`,
+                  'AiModule',
+                );
+                resolve();
+              })
+              .catch(reject);
+          },
+          error: (error: unknown) => {
+            const message = error instanceof Error ? error.message : String(error);
+            void publishResponse({
+              userId: value.userId,
+              conversationId,
+              event: 'error',
+              error: message,
+            })
+              .then(() => reject(error))
+              .catch(reject);
+          },
+        });
+
+      publishQueue.catch((error) => {
+        subscription.unsubscribe();
+        reject(error);
+      });
+    });
   }
 }

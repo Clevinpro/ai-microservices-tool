@@ -1,6 +1,7 @@
+import { PrismaService } from '@ai-platform/database';
 import { KafkaConsumerService, KafkaProducerService } from '@ai-platform/kafka';
 import { KAFKA_TOPICS, LoggerService } from '@ai-platform/shared';
-import { Body, Controller, MessageEvent, Post, Req, Sse, UseGuards } from '@nestjs/common';
+import { Body, Controller, MessageEvent, Post, Query, Req, Sse, UseGuards } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { JwtAuthGuard } from '../auth/auth.guard';
 import { ChatRequestDto } from './ai.dto';
@@ -16,6 +17,10 @@ type AuthenticatedRequest = {
 type AiResponsePayload = {
   userId: string;
   conversationId?: string;
+  event?: 'status' | 'chunk' | 'complete' | 'error';
+  status?: string;
+  result?: string;
+  error?: string;
   [key: string]: unknown;
 };
 
@@ -25,6 +30,7 @@ export class AiController {
     private readonly kafkaProducer: KafkaProducerService,
     private readonly kafkaConsumer: KafkaConsumerService,
     private readonly logger: LoggerService,
+    private readonly prisma: PrismaService,
   ) {}
 
   @UseGuards(JwtAuthGuard)
@@ -34,9 +40,12 @@ export class AiController {
     @Body() dto: ChatRequestDto,
   ): Promise<{ status: 'processing'; conversationId?: string }> {
     const userId = this.getUserId(req);
+    const conversationId =
+      dto.conversationId ?? (await this.createConversation(userId, dto.message));
+
     this.logger.log('AI chat request received', AiController.name, {
       userId,
-      conversationId: dto.conversationId,
+      conversationId,
     });
 
     await this.kafkaProducer.publish(KAFKA_TOPICS.AI_REQUEST, {
@@ -44,44 +53,65 @@ export class AiController {
       value: {
         userId,
         message: dto.message,
-        conversationId: dto.conversationId,
+        conversationId,
       },
     });
 
     this.logger.log('AI chat request queued', AiController.name, {
       userId,
-      conversationId: dto.conversationId,
+      conversationId,
     });
 
     return {
       status: 'processing',
-      conversationId: dto.conversationId,
+      conversationId,
     };
   }
 
   @UseGuards(JwtAuthGuard)
   @Sse('chat/stream')
-  stream(@Req() req: AuthenticatedRequest): Observable<MessageEvent> {
+  stream(
+    @Req() req: AuthenticatedRequest,
+    @Query('conversationId') streamConversationId?: string,
+  ): Observable<MessageEvent> {
     const userId = this.getUserId(req);
-    this.logger.log('AI chat stream opened', AiController.name, { userId });
+    this.logger.log('AI chat stream opened', AiController.name, { userId, streamConversationId });
 
     return new Observable<MessageEvent>((subscriber) => {
-      void this.kafkaConsumer.subscribe<AiResponsePayload>(
-        KAFKA_TOPICS.AI_RESPONSE,
-        async (message) => {
-          if (message.value.userId !== userId) {
-            return;
-          }
+      const handler = async (message: { value: AiResponsePayload }) => {
+        if (message.value.userId !== userId) {
+          return;
+        }
 
-          subscriber.next({
-            data: message.value,
-          });
-        },
-      );
+        if (streamConversationId && message.value.conversationId !== streamConversationId) {
+          return;
+        }
+
+        subscriber.next({
+          data: JSON.stringify(message.value),
+        });
+      };
+
+      void this.kafkaConsumer.subscribe<AiResponsePayload>(KAFKA_TOPICS.AI_RESPONSE, handler);
+
+      // Cleanup: remove handler when SSE connection closes
+      return () => {
+        this.kafkaConsumer.unsubscribe(KAFKA_TOPICS.AI_RESPONSE, handler);
+      };
     });
   }
 
   private getUserId(req: AuthenticatedRequest): string {
     return req.user.id ?? req.user.sub ?? req.user.userId ?? '';
+  }
+
+  private async createConversation(userId: string, message: string): Promise<string> {
+    const title = message.trim().slice(0, 80) || null;
+    const conversation = await this.prisma.conversation.create({
+      data: { userId, title },
+      select: { id: true },
+    });
+
+    return conversation.id;
   }
 }

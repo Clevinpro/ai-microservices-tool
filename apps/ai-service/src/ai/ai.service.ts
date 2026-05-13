@@ -1,12 +1,18 @@
-import { LoggerService } from '@ai-platform/shared';
+import { ChatMessage, LoggerService } from '@ai-platform/shared';
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { Observable, from } from 'rxjs';
+import { BehaviorSubject, Observable, from } from 'rxjs';
 import { switchMap, tap } from 'rxjs/operators';
-import { SearchService } from '../search/search.service';
+import { ConversationService } from '../conversation/conversation.service';
+import { SearchService, SimilaritySearchResult } from '../search/search.service';
 import { AiProviderFactory } from './providers/ai-provider.factory';
 
 type AiRequestPayload = {
   message: string;
+  conversationId?: string;
+};
+
+type ProcessMessageOptions = {
+  onStatus?: (status: string) => void;
 };
 
 @Injectable()
@@ -14,12 +20,19 @@ export class AiService {
   constructor(
     private readonly searchService: SearchService,
     private readonly factory: AiProviderFactory,
+    private readonly conversationService: ConversationService,
     private readonly logger: LoggerService,
   ) {}
 
-  processMessage(request: unknown): Observable<string> {
+  processMessage(request: unknown, options?: ProcessMessageOptions): Observable<string> {
     const payload = this.parseRequest(request);
-    this.logger.log(`Process message: length=${payload.message.length}`, 'AiService');
+    const emitStatus = (status: string) => options?.onStatus?.(status);
+
+    emitStatus('Preparing request...');
+    this.logger.log(
+      `Process message: conversationId=${payload.conversationId}, length=${payload.message.length}`,
+      'AiService',
+    );
     const provider = this.factory.getProvider();
     void provider
       .getActiveModel?.()
@@ -36,45 +49,142 @@ export class AiService {
         );
       });
 
+    emitStatus('Searching relevant context...');
     return from(this.searchService.similaritySearch(payload.message)).pipe(
-      tap((chunks) => this.logger.log(`Context chunks: count=${chunks.length}`, 'AiService')),
-      switchMap((chunks) => {
-        const messageWithContext =
-          chunks.length > 0
-            ? {
-                system: `Контекст (єдине джерело фактів):
-${this.searchService.formatContext(chunks)}
-
-Правила відповіді:
-- Використовуй лише формулювання з контексту вище; 
-- Відповідай дослівно з нього, без перефразування та без «своїх» пояснень, прикладів чи доповнень.
-- Не додавай від себе інформацію, яку немає в контексті.
-- Формат відповіді (номер тега в документації, повний текст з документації).
-- Якщо в контексті немає відповіді — прямо скажи про це.`,
-                user: payload.message,
-              }
-            : payload.message;
-
-        this.logger.log('Starting LLM stream', 'AiService');
-        return provider.chat(messageWithContext).pipe(
-          tap({
-            complete: () => this.logger.log('LLM stream completed', 'AiService'),
-            error: (err: unknown) =>
-              this.logger.error(
-                err instanceof Error ? err.message : String(err),
-                err instanceof Error ? err.stack : undefined,
-                'AiService',
-              ),
-          }),
+      tap((chunks) => {
+        this.logger.log(`Context chunks: count=${chunks.length}`, 'AiService');
+        emitStatus(
+          chunks.length > 0 ? `Found ${chunks.length} context chunks` : 'No relevant context found',
         );
       }),
+      switchMap((chunks) =>
+        from(this.loadSystemPrompt(chunks)).pipe(
+          switchMap((systemPrompt) =>
+            from(
+              this.buildAndStream(
+                provider,
+                payload.message,
+                systemPrompt,
+                payload.conversationId,
+                emitStatus,
+              ),
+            ).pipe(switchMap((obs) => obs)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  private async loadSystemPrompt(chunks: SimilaritySearchResult[]): Promise<string> {
+    this.logger.log(`Loading system prompt: chunksCount=${chunks.length}`, 'AiService');
+    if (chunks.length === 0) {
+      return `Ти — AI-асистент платформи. Відповідай чітко та корисно. Якщо питання стосується специфічних даних чи документів платформи — повідом, що відповідна інформація не знайдена в базі знань.`;
+    }
+    const contextText = this.searchService.formatContext(chunks);
+    return `Context (single source of facts):
+${contextText}
+
+Response rules:
+- Use only wording from context above;
+- Respond literally from it, no paraphrasing or extra explanations;
+- Do not add information not in context.
+- Response format: tag number in docs, full text from docs.
+- If context has no answer — state it explicitly.`;
+  }
+
+  private async buildAndStream(
+    provider: ReturnType<AiProviderFactory['getProvider']>,
+    userMessage: string,
+    systemPrompt: string | undefined,
+    conversationId: string | undefined,
+    emitStatus: (status: string) => void,
+  ): Promise<Observable<string>> {
+    const messages: ChatMessage[] = [];
+
+    if (systemPrompt) {
+      messages.push({ role: 'system', content: systemPrompt });
+    }
+
+    if (conversationId) {
+      emitStatus('Loading conversation history...');
+      const history = await this.conversationService.loadHistory(conversationId);
+      for (const msg of history) {
+        messages.push(msg);
+      }
+    }
+
+    messages.push({ role: 'user', content: userMessage });
+
+    if (conversationId) {
+      emitStatus('Saving user message...');
+      await this.conversationService.saveMessage({
+        conversationId,
+        role: 'user',
+        content: userMessage,
+      });
+    }
+
+    this.logger.log(
+      `Sending to LLM: system=${systemPrompt ? 'yes' : 'no'}, history=${messages.length - 1}, userMsgLen=${userMessage.length}`,
+      'AiService',
+    );
+
+    emitStatus('Sending request to the model...');
+    const stream = provider.chat(messages);
+
+    const subject = new BehaviorSubject<string>('');
+    let collected = '';
+    let firstChunkReceived = false;
+
+    const subscription = stream.subscribe({
+      next: (chunk) => {
+        if (!firstChunkReceived) {
+          firstChunkReceived = true;
+          emitStatus('Model is generating a response...');
+        }
+        collected += chunk;
+        subject.next(chunk);
+      },
+      complete: () => {
+        emitStatus('Saving assistant response...');
+        void this.persistAssistantMessage(conversationId, collected)
+          .then(() => subject.complete())
+          .catch((err: unknown) => subject.error(err));
+      },
+      error: (err) => {
+        subject.error(err);
+      },
+    });
+
+    const result = subject.asObservable().pipe(
+      tap({
+        unsubscribe: () => subscription.unsubscribe(),
+      }),
+    );
+
+    return result;
+  }
+
+  private async persistAssistantMessage(
+    conversationId: string | undefined,
+    content: string,
+  ): Promise<void> {
+    if (!conversationId) return;
+    await this.conversationService.saveMessage({
+      conversationId,
+      role: 'assistant',
+      content,
+    });
+    this.logger.log(
+      `Saved assistant message: conversationId=${conversationId}, len=${content.length}`,
+      'AiService',
     );
   }
 
   private parseRequest(request: unknown): AiRequestPayload {
     if (!request || typeof request !== 'object') {
       this.logger.warn('Invalid AI request: not an object', 'AiService');
-      throw new BadRequestException('Request must be an object.');
+      throw new BadRequestException('Request message must be a non-empty string.');
     }
 
     const r = request as Record<string, unknown>;
@@ -87,6 +197,9 @@ ${this.searchService.formatContext(chunks)}
       throw new BadRequestException('Request message must be a non-empty string.');
     }
 
-    return { message };
+    return {
+      message,
+      conversationId: typeof r.conversationId === 'string' ? r.conversationId : undefined,
+    };
   }
 }
