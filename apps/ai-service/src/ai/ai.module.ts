@@ -1,4 +1,4 @@
-import { KAFKA_TOPICS, LoggerService } from '@ai-platform/shared';
+import { AiResponsePayload, AiStatusStage, KAFKA_TOPICS, LoggerService } from '@ai-platform/shared';
 import { KafkaConsumerService, KafkaProducerService } from '@ai-platform/kafka';
 import { Module, OnModuleInit } from '@nestjs/common';
 import { ConversationService } from '../conversation/conversation.service';
@@ -14,15 +14,6 @@ interface AiRequestPayload {
   conversationId?: string;
   message: string;
 }
-
-type AiResponsePayload = {
-  userId: string;
-  conversationId: string;
-  event: 'status' | 'chunk' | 'complete' | 'error';
-  status?: string;
-  result?: string;
-  error?: string;
-};
 
 @Module({
   imports: [],
@@ -89,12 +80,13 @@ export class AiModule implements OnModuleInit {
         return publishQueue;
       };
 
-      const publishStatus = (status: string) => {
+      const publishStatus = (stage: AiStatusStage, message: string) => {
         void publishResponse({
           userId: value.userId,
           conversationId,
           event: 'status',
-          status,
+          stage,
+          message,
         });
       };
 

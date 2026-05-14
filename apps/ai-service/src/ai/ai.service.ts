@@ -1,4 +1,4 @@
-import { ChatMessage, LoggerService } from '@ai-platform/shared';
+import { AiStatusStage, ChatMessage, LoggerService } from '@ai-platform/shared';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { BehaviorSubject, Observable, from } from 'rxjs';
 import { switchMap, tap } from 'rxjs/operators';
@@ -12,7 +12,7 @@ type AiRequestPayload = {
 };
 
 type ProcessMessageOptions = {
-  onStatus?: (status: string) => void;
+  onStatus?: (stage: AiStatusStage, message: string) => void;
 };
 
 @Injectable()
@@ -26,9 +26,10 @@ export class AiService {
 
   processMessage(request: unknown, options?: ProcessMessageOptions): Observable<string> {
     const payload = this.parseRequest(request);
-    const emitStatus = (status: string) => options?.onStatus?.(status);
+    const emitStatus = (stage: AiStatusStage, message: string) =>
+      options?.onStatus?.(stage, message);
 
-    emitStatus('Preparing request...');
+    emitStatus('init', 'Preparing request...');
     this.logger.log(
       `Process message: conversationId=${payload.conversationId}, length=${payload.message.length}`,
       'AiService',
@@ -49,16 +50,18 @@ export class AiService {
         );
       });
 
-    emitStatus('Searching relevant context...');
+    emitStatus('rag_search', 'Searching relevant context...');
     return from(this.searchService.similaritySearch(payload.message)).pipe(
       tap((chunks) => {
         this.logger.log(`Context chunks: count=${chunks.length}`, 'AiService');
         emitStatus(
+          'rag_found',
           chunks.length > 0 ? `Found ${chunks.length} context chunks` : 'No relevant context found',
         );
       }),
       switchMap((chunks) =>
         from(this.loadSystemPrompt(chunks)).pipe(
+          tap(() => emitStatus('prompt_build', 'Preparing prompt...')),
           switchMap((systemPrompt) =>
             from(
               this.buildAndStream(
@@ -97,7 +100,7 @@ Response rules:
     userMessage: string,
     systemPrompt: string | undefined,
     conversationId: string | undefined,
-    emitStatus: (status: string) => void,
+    emitStatus: (stage: AiStatusStage, message: string) => void,
   ): Promise<Observable<string>> {
     const messages: ChatMessage[] = [];
 
@@ -106,7 +109,7 @@ Response rules:
     }
 
     if (conversationId) {
-      emitStatus('Loading conversation history...');
+      emitStatus('history_load', 'Loading conversation history...');
       const history = await this.conversationService.loadHistory(conversationId);
       for (const msg of history) {
         messages.push(msg);
@@ -116,7 +119,7 @@ Response rules:
     messages.push({ role: 'user', content: userMessage });
 
     if (conversationId) {
-      emitStatus('Saving user message...');
+      emitStatus('save_message', 'Saving user message...');
       await this.conversationService.saveMessage({
         conversationId,
         role: 'user',
@@ -129,7 +132,7 @@ Response rules:
       'AiService',
     );
 
-    emitStatus('Sending request to the model...');
+    emitStatus('llm_start', 'Sending request to the model...');
     const stream = provider.chat(messages);
 
     const subject = new BehaviorSubject<string>('');
@@ -140,13 +143,13 @@ Response rules:
       next: (chunk) => {
         if (!firstChunkReceived) {
           firstChunkReceived = true;
-          emitStatus('Model is generating a response...');
+          emitStatus('llm_generating', 'Model is generating a response...');
         }
         collected += chunk;
         subject.next(chunk);
       },
       complete: () => {
-        emitStatus('Saving assistant response...');
+        emitStatus('save_response', 'Saving assistant response...');
         void this.persistAssistantMessage(conversationId, collected)
           .then(() => subject.complete())
           .catch((err: unknown) => subject.error(err));

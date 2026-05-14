@@ -2,6 +2,29 @@ import type { Observable } from 'rxjs';
 
 export type MessageRole = 'system' | 'user' | 'assistant';
 
+export type AiEventType = 'status' | 'chunk' | 'complete' | 'error';
+
+export type AiStatusStage =
+  | 'init'
+  | 'rag_search'
+  | 'rag_found'
+  | 'prompt_build'
+  | 'history_load'
+  | 'save_message'
+  | 'llm_start'
+  | 'llm_generating'
+  | 'save_response';
+
+export interface AiResponsePayload {
+  userId: string;
+  conversationId: string;
+  event: AiEventType;
+  stage?: AiStatusStage;
+  message?: string;
+  result?: string;
+  error?: string;
+}
+
 export interface ChatMessage {
   role: MessageRole;
   content: string;

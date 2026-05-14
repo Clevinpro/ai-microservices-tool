@@ -1,6 +1,6 @@
 import { PrismaService } from '@ai-platform/database';
 import { KafkaConsumerService, KafkaProducerService } from '@ai-platform/kafka';
-import { KAFKA_TOPICS, LoggerService } from '@ai-platform/shared';
+import { AiResponsePayload, KAFKA_TOPICS, LoggerService } from '@ai-platform/shared';
 import { Body, Controller, MessageEvent, Post, Query, Req, Sse, UseGuards } from '@nestjs/common';
 import { Observable } from 'rxjs';
 import { JwtAuthGuard } from '../auth/auth.guard';
@@ -12,16 +12,6 @@ type AuthenticatedRequest = {
     sub?: string;
     userId?: string;
   };
-};
-
-type AiResponsePayload = {
-  userId: string;
-  conversationId?: string;
-  event?: 'status' | 'chunk' | 'complete' | 'error';
-  status?: string;
-  result?: string;
-  error?: string;
-  [key: string]: unknown;
 };
 
 @Controller('ai')
