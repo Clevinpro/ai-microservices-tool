@@ -1,9 +1,12 @@
+import { PrismaService } from '@ai-platform/database';
 import { AiStatusStage, ChatMessage, LoggerService } from '@ai-platform/shared';
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { BehaviorSubject, Observable, from } from 'rxjs';
+import { Prisma } from '@prisma/client';
+import { BehaviorSubject, Observable, from, of } from 'rxjs';
 import { switchMap, tap } from 'rxjs/operators';
 import { ConversationService } from '../conversation/conversation.service';
 import { SearchService, SimilaritySearchResult } from '../search/search.service';
+import { CapabilityDetectorService } from './capability-detector.service';
 import { AiProviderFactory } from './providers/ai-provider.factory';
 
 type AiRequestPayload = {
@@ -15,6 +18,11 @@ type ProcessMessageOptions = {
   onStatus?: (stage: AiStatusStage, message: string) => void;
 };
 
+type GuideAnswerSource = {
+  summary: string | null;
+  content: string;
+};
+
 @Injectable()
 export class AiService {
   constructor(
@@ -22,6 +30,8 @@ export class AiService {
     private readonly factory: AiProviderFactory,
     private readonly conversationService: ConversationService,
     private readonly logger: LoggerService,
+    private readonly prismaService: PrismaService,
+    private readonly capabilityDetector: CapabilityDetectorService,
   ) {}
 
   processMessage(request: unknown, options?: ProcessMessageOptions): Observable<string> {
@@ -34,6 +44,25 @@ export class AiService {
       `Process message: conversationId=${payload.conversationId}, length=${payload.message.length}`,
       'AiService',
     );
+
+    return from(this.capabilityDetector.isCapabilityQuery(payload.message)).pipe(
+      switchMap((isCapability) => {
+        if (isCapability) {
+          return from(this.answerCapabilityQuery(payload, emitStatus)).pipe(
+            switchMap((answer) =>
+              answer === null ? this.runRagFlow(payload, emitStatus) : of(answer),
+            ),
+          );
+        }
+        return this.runRagFlow(payload, emitStatus);
+      }),
+    );
+  }
+
+  private runRagFlow(
+    payload: AiRequestPayload,
+    emitStatus: (stage: AiStatusStage, message: string) => void,
+  ): Observable<string> {
     const provider = this.factory.getProvider();
     void provider
       .getActiveModel?.()
@@ -78,21 +107,57 @@ export class AiService {
     );
   }
 
+  private async answerCapabilityQuery(
+    payload: AiRequestPayload,
+    emitStatus: (stage: AiStatusStage, message: string) => void,
+  ): Promise<string | null> {
+    const [guide] = await this.prismaService.$queryRaw<GuideAnswerSource[]>(
+      Prisma.sql`
+        SELECT "summary", "content"
+        FROM "documents"
+        WHERE "type" = 'GUIDE'::"DocumentType"
+        ORDER BY "created_at" ASC
+        LIMIT 1
+      `,
+    );
+
+    if (!guide) {
+      this.logger.warn('Capability query guide not found, falling back to RAG', 'AiService');
+      return null;
+    }
+
+    const answer = guide.summary ?? guide.content;
+    emitStatus('save_message', 'Saving user message...');
+    if (payload.conversationId) {
+      await this.conversationService.saveMessage({
+        conversationId: payload.conversationId,
+        role: 'user',
+        content: payload.message,
+      });
+    }
+
+    emitStatus('save_response', 'Saving assistant response...');
+    await this.persistAssistantMessage(payload.conversationId, answer);
+    this.logger.log('Capability query answered from guide summary', 'AiService');
+
+    return answer;
+  }
+
   private async loadSystemPrompt(chunks: SimilaritySearchResult[]): Promise<string> {
     this.logger.log(`Loading system prompt: chunksCount=${chunks.length}`, 'AiService');
     if (chunks.length === 0) {
-      return `Ти — AI-асистент платформи. Відповідай чітко та корисно. Якщо питання стосується специфічних даних чи документів платформи — повідом, що відповідна інформація не знайдена в базі знань.`;
+      return `You are the platform’s AI assistant. Respond clearly and helpfully. If the question concerns specific platform data or documents, inform the user that the relevant information was not found in the knowledge base.`;
     }
     const contextText = this.searchService.formatContext(chunks);
     return `Context (single source of facts):
-${contextText}
+      ${contextText}
 
-Response rules:
-- Use only wording from context above;
-- Respond literally from it, no paraphrasing or extra explanations;
-- Do not add information not in context.
-- Response format: tag number in docs, full text from docs.
-- If context has no answer — state it explicitly.`;
+      Response rules:
+      - Use only wording from context above;
+      - Respond literally from it, no paraphrasing or extra explanations;
+      - Do not add information not in context.
+      - Response format: tag number in docs, full text from docs.
+      - If context has no answer — state it explicitly.`;
   }
 
   private async buildAndStream(

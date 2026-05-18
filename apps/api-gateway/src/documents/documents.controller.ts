@@ -4,6 +4,7 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
+  Logger,
   Post,
   UploadedFile,
   UseGuards,
@@ -21,6 +22,8 @@ type UploadedMulterFile = {
 
 @Controller('documents')
 export class DocumentsController {
+  private readonly logger = new Logger(DocumentsController.name);
+
   @Post('upload')
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
@@ -39,11 +42,16 @@ export class DocumentsController {
 
     const formData = new FormData();
     const fileBytes = Uint8Array.from(file.buffer);
+    const decodedFilename = file.originalname;
+    const ext = decodedFilename.toLowerCase().endsWith('.md') ? '.md' : '.txt';
+    const safeBlobName = decodedFilename === 'guide.md' ? 'guide.md' : `document${ext}`;
+
     formData.append(
       'file',
       new Blob([fileBytes], { type: file.mimetype || 'text/plain' }),
-      file.originalname,
+      safeBlobName,
     );
+    formData.append('titleBase64', Buffer.from(decodedFilename, 'utf8').toString('base64'));
 
     const response = await fetch(`${this.getAiServiceBaseUrl()}/api/documents/upload`, {
       method: 'POST',
@@ -51,6 +59,8 @@ export class DocumentsController {
     });
 
     if (!response.ok) {
+      const errorBody = await response.text().catch(() => '');
+      this.logger.error(`AI service returned ${response.status}: ${errorBody}`);
       throw new BadGatewayException('AI service upload request failed');
     }
 

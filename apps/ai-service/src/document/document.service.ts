@@ -7,6 +7,20 @@ import { readFile } from 'fs/promises';
 import { extname } from 'path';
 import { OllamaEmbeddingService } from '../embeddings/embeddings.service';
 
+export const DOCUMENT_TYPE = {
+  GUIDE: 'GUIDE',
+  DOCUMENTATION: 'DOCUMENTATION',
+} as const;
+
+export type DocumentTypeValue = (typeof DOCUMENT_TYPE)[keyof typeof DOCUMENT_TYPE];
+
+export type DocumentNotes = {
+  id: string;
+  title: string;
+  notes: string | null;
+  createdAt: Date;
+};
+
 @Injectable()
 export class DocumentService {
   private static readonly CHUNK_SIZE = 500;
@@ -21,23 +35,18 @@ export class DocumentService {
   async uploadDocument(
     filePath: string,
     title: string,
-  ): Promise<{ documentId: string; chunksCount: number }> {
+    filename = title,
+  ): Promise<{ documentId: string; chunksCount: number; type: DocumentTypeValue }> {
     this.assertSupportedFile(filePath);
 
     this.logger.log(`Reading document: title="${title}"`, 'DocumentService');
     const text = await readFile(filePath, 'utf-8');
     const chunks = this.splitIntoChunks(text);
+    const type = this.getDocumentType(filename);
     this.logger.log(`Split into ${chunks.length} chunk(s), storing document`, 'DocumentService');
 
-    const documentId = randomUUID();
-    await this.prismaService.$executeRaw(
-      Prisma.sql`
-        INSERT INTO "documents" ("id", "title", "content", "file_path", "created_at", "updated_at")
-        VALUES (${documentId}, ${title}, ${text}, ${filePath}, NOW(), NOW())
-      `,
-    );
-
-    this.logger.log(`Document row inserted: id=${documentId}`, 'DocumentService');
+    const documentId = await this.upsertDocument(filePath, title, text, type);
+    this.logger.log(`Document row stored: id=${documentId}, type=${type}`, 'DocumentService');
 
     let chunkIndex = 0;
     for (const chunk of chunks) {
@@ -62,7 +71,23 @@ export class DocumentService {
       `Document indexed: id=${documentId}, chunks=${chunks.length}`,
       'DocumentService',
     );
-    return { documentId, chunksCount: chunks.length };
+
+    return { documentId, chunksCount: chunks.length, type };
+  }
+
+  async getDocumentationNotes(): Promise<DocumentNotes[]> {
+    return this.prismaService.$queryRaw<DocumentNotes[]>(
+      Prisma.sql`
+        SELECT
+          "id",
+          "title",
+          "notes",
+          "created_at" AS "createdAt"
+        FROM "documents"
+        WHERE "type" = ${DOCUMENT_TYPE.DOCUMENTATION}::"DocumentType"
+        ORDER BY "created_at" DESC
+      `,
+    );
   }
 
   splitIntoChunks(text: string): string[] {
@@ -98,6 +123,78 @@ export class DocumentService {
     }
 
     return chunks;
+  }
+
+  private getDocumentType(filename: string): DocumentTypeValue {
+    return filename === 'guide.md' ? DOCUMENT_TYPE.GUIDE : DOCUMENT_TYPE.DOCUMENTATION;
+  }
+
+  private async upsertDocument(
+    filePath: string,
+    title: string,
+    text: string,
+    type: DocumentTypeValue,
+  ): Promise<string> {
+    if (type !== DOCUMENT_TYPE.GUIDE) {
+      const documentId = randomUUID();
+      await this.insertDocument(documentId, filePath, title, text, type);
+      return documentId;
+    }
+
+    return this.prismaService.$transaction(async (transaction) => {
+      const existingGuide = await transaction.$queryRaw<{ id: string }[]>(
+        Prisma.sql`
+          SELECT "id"
+          FROM "documents"
+          WHERE "type" = ${DOCUMENT_TYPE.GUIDE}::"DocumentType"
+          ORDER BY "created_at" ASC
+          LIMIT 1
+          FOR UPDATE
+        `,
+      );
+      const existingGuideId = existingGuide[0]?.id;
+
+      if (existingGuideId) {
+        await transaction.$executeRaw(
+          Prisma.sql`
+            UPDATE "documents"
+            SET
+              "title" = ${title},
+              "content" = ${text},
+              "file_path" = ${filePath},
+              "updated_at" = NOW()
+            WHERE "id" = ${existingGuideId}
+          `,
+        );
+        await transaction.$executeRaw(
+          Prisma.sql`
+            DELETE FROM "chunks"
+            WHERE "document_id" = ${existingGuideId}
+          `,
+        );
+        return existingGuideId;
+      }
+
+      const documentId = randomUUID();
+      await this.insertDocument(documentId, filePath, title, text, type, transaction);
+      return documentId;
+    });
+  }
+
+  private async insertDocument(
+    documentId: string,
+    filePath: string,
+    title: string,
+    text: string,
+    type: DocumentTypeValue,
+    client: Prisma.TransactionClient | PrismaService = this.prismaService,
+  ): Promise<void> {
+    await client.$executeRaw(
+      Prisma.sql`
+        INSERT INTO "documents" ("id", "title", "content", "file_path", "type", "created_at", "updated_at")
+        VALUES (${documentId}, ${title}, ${text}, ${filePath}, ${type}::"DocumentType", NOW(), NOW())
+      `,
+    );
   }
 
   private calculateNextStart(text: string, end: number): number {

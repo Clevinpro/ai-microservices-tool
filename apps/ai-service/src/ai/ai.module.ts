@@ -5,6 +5,7 @@ import { ConversationService } from '../conversation/conversation.service';
 import { OllamaEmbeddingService } from '../embeddings/embeddings.service';
 import { SearchService } from '../search/search.service';
 import { AiService } from './ai.service';
+import { CapabilityDetectorService } from './capability-detector.service';
 import { AiProviderFactory } from './providers/ai-provider.factory';
 import { ClaudeProvider } from './providers/claude.provider';
 import { OllamaProvider } from './providers/ollama.provider';
@@ -19,6 +20,7 @@ interface AiRequestPayload {
   imports: [],
   providers: [
     AiService,
+    CapabilityDetectorService,
     SearchService,
     OllamaEmbeddingService,
     ConversationService,

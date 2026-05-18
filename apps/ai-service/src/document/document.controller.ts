@@ -3,6 +3,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
@@ -13,21 +14,29 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { extname, join } from 'path';
-import { DocumentService } from './document.service';
+import { KnowledgeService } from '../knowledge/knowledge.service';
+import { DOCUMENT_TYPE, DocumentNotes, DocumentService } from './document.service';
 
 type UploadDocumentBody = {
   title?: string;
+  titleBase64?: string;
 };
 
 @Controller('documents')
 export class DocumentController {
   constructor(
     private readonly documentService: DocumentService,
+    private readonly knowledgeService: KnowledgeService,
     private readonly logger: LoggerService,
   ) {}
 
+  @Get('notes')
+  async getDocumentNotes(): Promise<DocumentNotes[]> {
+    return this.documentService.getDocumentationNotes();
+  }
+
   @Post('upload')
-  @HttpCode(HttpStatus.OK)
+  @HttpCode(HttpStatus.CREATED)
   @UseInterceptors(FileInterceptor('file'))
   async uploadDocument(
     @UploadedFile() file: Express.Multer.File | undefined,
@@ -49,17 +58,38 @@ export class DocumentController {
 
     try {
       await writeFile(tempFilePath, file.buffer);
-      const title = body.title?.trim() || file.originalname;
+      const title =
+        (body.titleBase64
+          ? Buffer.from(body.titleBase64, 'base64').toString('utf8')
+          : body.title?.trim()) || file.originalname;
       this.logger.log(
         `Upload started: file="${file.originalname}", title="${title}"`,
         'DocumentController',
       );
-      const result = await this.documentService.uploadDocument(tempFilePath, title);
+      const result = await this.documentService.uploadDocument(
+        tempFilePath,
+        title,
+        file.originalname,
+      );
       this.logger.log(
         `Upload finished: documentId=${result.documentId}, chunks=${result.chunksCount}`,
         'DocumentController',
       );
-      return result;
+
+      if (result.type === DOCUMENT_TYPE.DOCUMENTATION) {
+        void this.knowledgeService
+          .generateDocNotes(result.documentId)
+          .then(() => this.knowledgeService.refreshGuideSummary(result.documentId))
+          .catch((error: unknown) => {
+            this.logger.error(
+              error instanceof Error ? error.message : String(error),
+              error instanceof Error ? error.stack : undefined,
+              'DocumentController',
+            );
+          });
+      }
+
+      return { documentId: result.documentId, chunksCount: result.chunksCount };
     } finally {
       await rm(tempDirectory, { recursive: true, force: true });
     }

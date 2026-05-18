@@ -4,6 +4,7 @@ import { LoggerModule } from '@ai-platform/shared';
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AiModule } from '../ai/ai.module';
+import { KnowledgeModule } from '../knowledge/knowledge.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { AiModule } from '../ai/ai.module';
       groupId: process.env.KAFKA_GROUP_ID ?? 'ai-service',
     }),
     AiModule,
+    KnowledgeModule,
   ],
 })
 export class AppModule {}

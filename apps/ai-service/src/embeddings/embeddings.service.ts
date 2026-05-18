@@ -40,6 +40,14 @@ export class OllamaEmbeddingService {
 
   async generateBatch(texts: string[]): Promise<number[][]> {
     this.logger.log(`Batch embeddings: count=${texts.length}`, 'OllamaEmbeddingService');
-    return Promise.all(texts.map((text) => this.generateEmbedding(text)));
+    return Promise.all(texts.map((text) => this.generateEmbeddingSilent(text)));
+  }
+
+  private async generateEmbeddingSilent(text: string): Promise<number[]> {
+    const { data } = await axios.post<OllamaEmbeddingResponse>(`${this.ollamaUrl}/api/embeddings`, {
+      model: this.embeddingModel,
+      prompt: text,
+    });
+    return data.embedding;
   }
 }
