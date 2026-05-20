@@ -10,7 +10,6 @@ type AuthenticatedRequest = {
   user: {
     id?: string;
     sub?: string;
-    userId?: string;
   };
 };
 
@@ -92,7 +91,7 @@ export class AiController {
   }
 
   private getUserId(req: AuthenticatedRequest): string {
-    return req.user.id ?? req.user.sub ?? req.user.userId ?? '';
+    return req.user.id ?? req.user.sub ?? '';
   }
 
   private async createConversation(userId: string, message: string): Promise<string> {

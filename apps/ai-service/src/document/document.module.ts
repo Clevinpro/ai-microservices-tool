@@ -1,13 +1,13 @@
 import { DatabaseModule } from '@ai-platform/database';
 import { Module } from '@nestjs/common';
-import { OllamaEmbeddingService } from '../embeddings/embeddings.service';
+import { EmbeddingsModule } from '../embeddings/embeddings.module';
 import { KnowledgeModule } from '../knowledge/knowledge.module';
 import { DocumentController } from './document.controller';
 import { DocumentService } from './document.service';
 
 @Module({
-  imports: [DatabaseModule, KnowledgeModule],
+  imports: [DatabaseModule, EmbeddingsModule, KnowledgeModule],
   controllers: [DocumentController],
-  providers: [DocumentService, OllamaEmbeddingService],
+  providers: [DocumentService],
 })
 export class DocumentModule {}

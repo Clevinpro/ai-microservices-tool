@@ -2,8 +2,8 @@ import { AiResponsePayload, AiStatusStage, KAFKA_TOPICS, LoggerService } from '@
 import { KafkaConsumerService, KafkaProducerService } from '@ai-platform/kafka';
 import { Module, OnModuleInit } from '@nestjs/common';
 import { ConversationService } from '../conversation/conversation.service';
-import { OllamaEmbeddingService } from '../embeddings/embeddings.service';
-import { SearchService } from '../search/search.service';
+import { EmbeddingsModule } from '../embeddings/embeddings.module';
+import { SearchModule } from '../search/search.module';
 import { AiService } from './ai.service';
 import { CapabilityDetectorService } from './capability-detector.service';
 import { AiProviderFactory } from './providers/ai-provider.factory';
@@ -17,12 +17,10 @@ interface AiRequestPayload {
 }
 
 @Module({
-  imports: [],
+  imports: [EmbeddingsModule, SearchModule],
   providers: [
     AiService,
     CapabilityDetectorService,
-    SearchService,
-    OllamaEmbeddingService,
     ConversationService,
     AiProviderFactory,
     ClaudeProvider,
